@@ -94,21 +94,6 @@ function uid(): string {
   return `e_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function guessCategory(text: string): CategoryId {
-  const t = text.toLowerCase();
-  let best: CategoryId = "jimao";
-  let score = 0;
-  for (const { cat, words } of KEYWORDS) {
-    let s = 0;
-    for (const w of words) if (t.includes(w)) s += 1;
-    if (s > score) {
-      score = s;
-      best = cat;
-    }
-  }
-  return best;
-}
-
 function splitSentences(text: string): string[] {
   const parts = text
     .split(/[\n。！？!?；;]+/)
