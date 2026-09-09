@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { CATEGORIES, classifyRevealLine } from "@/lib/categories";
 import { todayKey } from "@/lib/dates";
 import { eggForDate } from "@/lib/eggs";
@@ -43,7 +42,6 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
 }
 
 export default function HomeChatPage() {
-  const router = useRouter();
   const [date, setDate] = useState("");
   const [egg, setEgg] = useState("");
   const [text, setText] = useState("");
@@ -51,6 +49,9 @@ export default function HomeChatPage() {
   const [error, setError] = useState("");
   const [userBubbles, setUserBubbles] = useState<string[]>([]);
   const [newEvents, setNewEvents] = useState<EventItem[]>([]);
+  const [pastReveals, setPastReveals] = useState<
+    { events: EventItem[]; insight: string; deepen: string | null }[]
+  >([]);
   const [visibleCount, setVisibleCount] = useState(0);
   const [deepen, setDeepen] = useState<string | null>(null);
   const [insightLine, setInsightLine] = useState("");
@@ -67,10 +68,23 @@ export default function HomeChatPage() {
   }, []);
 
   useEffect(() => {
-    if (phase !== "revealed" || visibleCount >= newEvents.length) return;
-    const t = setTimeout(() => setVisibleCount((n) => n + 1), 420);
+    if (phase !== "revealed" || newEvents.length === 0) return;
+    if (visibleCount < newEvents.length) {
+      const t = setTimeout(() => setVisibleCount((n) => n + 1), 420);
+      return () => clearTimeout(t);
+    }
+    // 动画播完：归档到对话，回到可继续录入
+    const t = setTimeout(() => {
+      setPastReveals((prev) => [
+        ...prev,
+        { events: newEvents, insight: insightLine, deepen },
+      ]);
+      setNewEvents([]);
+      setDeepen(null);
+      setPhase("idle");
+    }, 600);
     return () => clearTimeout(t);
-  }, [phase, visibleCount, newEvents.length]);
+  }, [phase, visibleCount, newEvents, insightLine, deepen]);
 
   const stopVoice = useCallback(() => {
     recognitionRef.current?.stop();
@@ -195,10 +209,6 @@ export default function HomeChatPage() {
     }
   };
 
-  const finishDay = () => {
-    router.push("/today");
-  };
-
   return (
     <>
       <header className="chat-header">
@@ -226,6 +236,45 @@ export default function HomeChatPage() {
         {userBubbles.map((b, i) => (
           <div key={`u-${i}`} className="bubble bubble-user">
             {b}
+          </div>
+        ))}
+
+        {pastReveals.map((batch, bi) => (
+          <div key={`r-${bi}`} className="bubble bubble-ai" style={{ maxWidth: "100%" }}>
+            <div style={{ fontWeight: 700, marginBottom: 10 }}>拆好了：</div>
+            {batch.events.map((ev) => {
+              const cat = CATEGORIES[ev.category];
+              return (
+                <div key={ev.id} className="event-card" style={{ marginBottom: 8 }}>
+                  <div className="classify-reveal">
+                    {classifyRevealLine(ev.category, ev.why)}
+                  </div>
+                  <div style={{ fontSize: "1.05rem", marginTop: 6 }}>
+                    <strong>
+                      {cat.emoji} {ev.text}
+                    </strong>
+                  </div>
+                  <div className="muted" style={{ fontSize: "0.8rem", marginTop: 4 }}>
+                    {cat.emoji} {cat.name} · 情绪 {ev.emotion}
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{ marginTop: 12 }}>
+              <strong>AI洞见</strong>
+              <p style={{ margin: "6px 0 0", lineHeight: 1.55 }}>{batch.insight}</p>
+            </div>
+            {batch.deepen && (
+              <div
+                className="card"
+                style={{ marginTop: 12, background: "#fff3e6", boxShadow: "none" }}
+              >
+                <div className="muted" style={{ fontSize: "0.8rem" }}>
+                  可选深挖（不问第二遍）
+                </div>
+                <p style={{ margin: "6px 0 0" }}>{batch.deepen}</p>
+              </div>
+            )}
           </div>
         ))}
 
@@ -328,28 +377,6 @@ export default function HomeChatPage() {
             倒给 AI
           </button>
         </div>
-        {phase === "revealed" && visibleCount >= newEvents.length && (
-          <div className="composer-actions">
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => {
-                setPhase("idle");
-                setNewEvents([]);
-                setDeepen(null);
-              }}
-            >
-              继续倒
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={finishDay}
-            >
-              今天就这些
-            </button>
-          </div>
-        )}
       </div>
     </>
   );
