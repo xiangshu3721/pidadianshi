@@ -215,10 +215,10 @@ export default function HomeChatPage() {
       <div className="chat-log" aria-live="polite">
         {userBubbles.length === 0 && phase === "idle" && (
           <div className="empty">
-            把破事倒这儿。语音或打字都行。
+            说说今天发生了什么——一件小事也行。
             <br />
             <span style={{ fontSize: "0.85rem" }}>
-              AI 会拆成几件，贴上 🪶🫘🍉🐢🐸
+              我会帮你拆开、归类，换个视角掂掂：到底是多大点事。
             </span>
           </div>
         )}
@@ -233,7 +233,7 @@ export default function HomeChatPage() {
           <div className="bubble bubble-ai">
             <span className="status-pill">正在鉴定……</span>
             <div className="muted" style={{ marginTop: 8, fontSize: "0.9rem" }}>
-              先别急，看看是不是屁大点事。
+              先听你讲完，再一件件看是多大点事。
             </div>
           </div>
         )}
@@ -305,7 +305,7 @@ export default function HomeChatPage() {
           id="dump"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="比如：早上地铁挤成饼，下午又想起去年那次吵架……"
+          placeholder="直接说发生了什么，比如：老板突然让改方案；刷到别人升职，心里堵……"
           disabled={phase === "analyzing"}
         />
         <div className="composer-actions">
