@@ -12,7 +12,17 @@ import {
 } from "@/lib/storage";
 import type { AnalyzeResponse, EventItem } from "@/lib/types";
 
-type Phase = "idle" | "listening" | "analyzing" | "revealed" | "error";
+type Turn = {
+  id: string;
+  user: string;
+  status: "analyzing" | "revealing" | "done" | "error";
+  events: EventItem[];
+  insight: string;
+  deepen: string | null;
+  visibleCount: number;
+};
+
+type Phase = "idle" | "listening" | "analyzing" | "error";
 
 type SpeechRecognitionLike = {
   lang: string;
@@ -41,24 +51,22 @@ function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
   return w.SpeechRecognition || w.webkitSpeechRecognition || null;
 }
 
+function newTurnId() {
+  return `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export default function HomeChatPage() {
   const [date, setDate] = useState("");
   const [egg, setEgg] = useState("");
   const [text, setText] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState("");
-  const [userBubbles, setUserBubbles] = useState<string[]>([]);
-  const [newEvents, setNewEvents] = useState<EventItem[]>([]);
-  const [pastReveals, setPastReveals] = useState<
-    { events: EventItem[]; insight: string; deepen: string | null }[]
-  >([]);
-  const [visibleCount, setVisibleCount] = useState(0);
-  const [deepen, setDeepen] = useState<string | null>(null);
-  const [insightLine, setInsightLine] = useState("");
+  const [turns, setTurns] = useState<Turn[]>([]);
   const [recording, setRecording] = useState(false);
   const mediaRec = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const chatLogRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const d = todayKey();
@@ -67,24 +75,41 @@ export default function HomeChatPage() {
     ensureDay(d);
   }, []);
 
+  // Soft-scroll chat-log when turns change
   useEffect(() => {
-    if (phase !== "revealed" || newEvents.length === 0) return;
-    if (visibleCount < newEvents.length) {
-      const t = setTimeout(() => setVisibleCount((n) => n + 1), 420);
+    const el = chatLogRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [turns]);
+
+  // Animate revealing turn: bump visibleCount, then mark done
+  useEffect(() => {
+    const revealing = turns.find((t) => t.status === "revealing");
+    if (!revealing) return;
+
+    if (revealing.visibleCount < revealing.events.length) {
+      const t = setTimeout(() => {
+        setTurns((prev) =>
+          prev.map((turn) =>
+            turn.id === revealing.id
+              ? { ...turn, visibleCount: turn.visibleCount + 1 }
+              : turn
+          )
+        );
+      }, 420);
       return () => clearTimeout(t);
     }
-    // 动画播完：归档到对话，回到可继续录入
+
+    // Animation finished → done (composer already unlocked when revealing started)
     const t = setTimeout(() => {
-      setPastReveals((prev) => [
-        ...prev,
-        { events: newEvents, insight: insightLine, deepen },
-      ]);
-      setNewEvents([]);
-      setDeepen(null);
-      setPhase("idle");
+      setTurns((prev) =>
+        prev.map((turn) =>
+          turn.id === revealing.id ? { ...turn, status: "done" } : turn
+        )
+      );
     }, 600);
     return () => clearTimeout(t);
-  }, [phase, visibleCount, newEvents, insightLine, deepen]);
+  }, [turns]);
 
   const stopVoice = useCallback(() => {
     recognitionRef.current?.stop();
@@ -170,13 +195,22 @@ export default function HomeChatPage() {
     stopVoice();
     setError("");
     setPhase("analyzing");
-    setNewEvents([]);
-    setVisibleCount(0);
-    setDeepen(null);
-    setInsightLine("");
-    setUserBubbles((b) => [...b, payload]);
-    appendRawInput(date || todayKey(), payload);
     setText("");
+
+    const turnId = newTurnId();
+    setTurns((prev) => [
+      ...prev,
+      {
+        id: turnId,
+        user: payload,
+        status: "analyzing",
+        events: [],
+        insight: "",
+        deepen: null,
+        visibleCount: 0,
+      },
+    ]);
+    appendRawInput(date || todayKey(), payload);
 
     try {
       const res = await fetch("/api/analyze", {
@@ -194,19 +228,88 @@ export default function HomeChatPage() {
       appendEvents(date || todayKey(), events);
       if (data.deepen) {
         updateDay(date || todayKey(), { deepen: data.deepen });
-        setDeepen(data.deepen);
       }
-      setNewEvents(events);
-      setInsightLine(
+      const insight =
         events[0]?.insight ||
-          "底下多半有个没被点名的需要。叫出名字就算过了一半。"
+        "底下多半有个没被点名的需要。叫出名字就算过了一半。";
+
+      setTurns((prev) =>
+        prev.map((turn) =>
+          turn.id === turnId
+            ? {
+                ...turn,
+                status: "revealing",
+                events,
+                insight,
+                deepen: data.deepen || null,
+                visibleCount: 0,
+              }
+            : turn
+        )
       );
-      setPhase("revealed");
-      setVisibleCount(0);
+      // Unlock composer during reveal animation (same as old "revealed" phase)
+      setPhase("idle");
     } catch {
       setError("鉴定失败了，可能是网络。再试一次？");
       setPhase("error");
+      setTurns((prev) =>
+        prev.map((turn) =>
+          turn.id === turnId ? { ...turn, status: "error" } : turn
+        )
+      );
     }
+  };
+
+  const renderReveal = (turn: Turn, animated: boolean) => {
+    const shown = animated
+      ? turn.events.slice(0, turn.visibleCount)
+      : turn.events;
+    const showFooter = animated
+      ? turn.visibleCount >= turn.events.length
+      : true;
+
+    return (
+      <div className="bubble bubble-ai" style={{ maxWidth: "100%" }}>
+        <div style={{ fontWeight: 700, marginBottom: 10 }}>拆好了：</div>
+        {shown.map((ev) => {
+          const cat = CATEGORIES[ev.category];
+          return (
+            <div key={ev.id} className="event-card" style={{ marginBottom: 8 }}>
+              <div className="classify-reveal">
+                {classifyRevealLine(ev.category, ev.why)}
+              </div>
+              <div style={{ fontSize: "1.05rem", marginTop: 6 }}>
+                <strong>
+                  {cat.emoji} {ev.text}
+                </strong>
+              </div>
+              <div className="muted" style={{ fontSize: "0.8rem", marginTop: 4 }}>
+                {cat.emoji} {cat.name} · 情绪 {ev.emotion}
+              </div>
+            </div>
+          );
+        })}
+        {showFooter && (
+          <>
+            <div style={{ marginTop: 12 }}>
+              <strong>AI洞见</strong>
+              <p style={{ margin: "6px 0 0", lineHeight: 1.55 }}>{turn.insight}</p>
+            </div>
+            {turn.deepen && (
+              <div
+                className="card"
+                style={{ marginTop: 12, background: "#fff3e6", boxShadow: "none" }}
+              >
+                <div className="muted" style={{ fontSize: "0.8rem" }}>
+                  可选深挖（不问第二遍）
+                </div>
+                <p style={{ margin: "6px 0 0" }}>{turn.deepen}</p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -222,8 +325,8 @@ export default function HomeChatPage() {
         )}
       </header>
 
-      <div className="chat-log" aria-live="polite">
-        {userBubbles.length === 0 && phase === "idle" && (
+      <div className="chat-log" aria-live="polite" ref={chatLogRef}>
+        {turns.length === 0 && phase === "idle" && (
           <div className="empty">
             说说今天发生了什么——一件小事也行。
             <br />
@@ -233,115 +336,24 @@ export default function HomeChatPage() {
           </div>
         )}
 
-        {userBubbles.map((b, i) => (
-          <div key={`u-${i}`} className="bubble bubble-user">
-            {b}
-          </div>
-        ))}
+        {turns.map((turn) => (
+          <div key={turn.id}>
+            <div className="bubble bubble-user">{turn.user}</div>
 
-        {pastReveals.map((batch, bi) => (
-          <div key={`r-${bi}`} className="bubble bubble-ai" style={{ maxWidth: "100%" }}>
-            <div style={{ fontWeight: 700, marginBottom: 10 }}>拆好了：</div>
-            {batch.events.map((ev) => {
-              const cat = CATEGORIES[ev.category];
-              return (
-                <div key={ev.id} className="event-card" style={{ marginBottom: 8 }}>
-                  <div className="classify-reveal">
-                    {classifyRevealLine(ev.category, ev.why)}
-                  </div>
-                  <div style={{ fontSize: "1.05rem", marginTop: 6 }}>
-                    <strong>
-                      {cat.emoji} {ev.text}
-                    </strong>
-                  </div>
-                  <div className="muted" style={{ fontSize: "0.8rem", marginTop: 4 }}>
-                    {cat.emoji} {cat.name} · 情绪 {ev.emotion}
-                  </div>
+            {turn.status === "analyzing" && (
+              <div className="bubble bubble-ai">
+                <span className="status-pill">正在鉴定……</span>
+                <div className="muted" style={{ marginTop: 8, fontSize: "0.9rem" }}>
+                  先听你讲完，再一件件看是多大点事。
                 </div>
-              );
-            })}
-            <div style={{ marginTop: 12 }}>
-              <strong>AI洞见</strong>
-              <p style={{ margin: "6px 0 0", lineHeight: 1.55 }}>{batch.insight}</p>
-            </div>
-            {batch.deepen && (
-              <div
-                className="card"
-                style={{ marginTop: 12, background: "#fff3e6", boxShadow: "none" }}
-              >
-                <div className="muted" style={{ fontSize: "0.8rem" }}>
-                  可选深挖（不问第二遍）
-                </div>
-                <p style={{ margin: "6px 0 0" }}>{batch.deepen}</p>
               </div>
             )}
+
+            {turn.status === "revealing" && renderReveal(turn, true)}
+
+            {turn.status === "done" && renderReveal(turn, false)}
           </div>
         ))}
-
-        {phase === "analyzing" && (
-          <div className="bubble bubble-ai">
-            <span className="status-pill">正在鉴定……</span>
-            <div className="muted" style={{ marginTop: 8, fontSize: "0.9rem" }}>
-              先听你讲完，再一件件看是多大点事。
-            </div>
-          </div>
-        )}
-
-        {phase === "revealed" && (
-          <div className="bubble bubble-ai" style={{ maxWidth: "100%" }}>
-            <div style={{ fontWeight: 700, marginBottom: 10 }}>拆好了：</div>
-            {newEvents.slice(0, visibleCount).map((ev) => {
-              const cat = CATEGORIES[ev.category];
-              return (
-                <div
-                  key={ev.id}
-                  className="event-card"
-                  style={{ marginBottom: 8 }}
-                >
-                  <div className="classify-reveal">
-                    {classifyRevealLine(ev.category, ev.why)}
-                  </div>
-                  <div style={{ fontSize: "1.05rem", marginTop: 6 }}>
-                    <strong>
-                      {cat.emoji} {ev.text}
-                    </strong>
-                  </div>
-                  <div
-                    className="muted"
-                    style={{ fontSize: "0.8rem", marginTop: 4 }}
-                  >
-                    {cat.emoji} {cat.name} · 情绪 {ev.emotion}
-                  </div>
-                </div>
-              );
-            })}
-            {visibleCount >= newEvents.length && (
-              <>
-                <div style={{ marginTop: 12 }}>
-                  <strong>AI洞见</strong>
-                  <p style={{ margin: "6px 0 0", lineHeight: 1.55 }}>
-                    {insightLine}
-                  </p>
-                </div>
-                {deepen && (
-                  <div
-                    className="card"
-                    style={{
-                      marginTop: 12,
-                      background: "#fff3e6",
-                      boxShadow: "none",
-                    }}
-                  >
-                    <div className="muted" style={{ fontSize: "0.8rem" }}>
-                      可选深挖（不问第二遍）
-                    </div>
-                    <p style={{ margin: "6px 0 0" }}>{deepen}</p>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
 
         {error && <div className="error">{error}</div>}
       </div>
