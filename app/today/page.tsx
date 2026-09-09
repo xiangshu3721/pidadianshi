@@ -1,90 +1,170 @@
 "use client";
 
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
 import {
   CATEGORIES,
   CATEGORY_ORDER,
-  countByCategory,
+  blackHoleFromCounts,
   emptyCounts,
 } from "@/lib/categories";
-import { formatDisplayDate, todayKey } from "@/lib/dates";
-import { ensureDay, updateDay } from "@/lib/storage";
-import type { AnalyzeResponse, CategoryId, DayData } from "@/lib/types";
+import {
+  formatDisplayDate,
+  monthRange,
+  todayKey,
+  weekRange,
+} from "@/lib/dates";
+import { aggregateRange, ensureDay, updateDay } from "@/lib/storage";
+import type {
+  AnalyzeResponse,
+  CategoryId,
+  DayData,
+  PeriodKind,
+} from "@/lib/types";
 
-export default function TodayPage() {
+const PERIODS: { id: PeriodKind; label: string }[] = [
+  { id: "today", label: "今日" },
+  { id: "week", label: "本周" },
+  { id: "month", label: "本月" },
+];
+
+function rangeFor(period: PeriodKind, date: string) {
+  if (period === "week") return weekRange(date);
+  if (period === "month") return monthRange(date);
+  return { start: date, end: date };
+}
+
+export default function ReportPage() {
+  const [period, setPeriod] = useState<PeriodKind>("today");
+  const [date, setDate] = useState("");
   const [day, setDay] = useState<DayData | null>(null);
+  const [counts, setCounts] = useState<Record<CategoryId, number>>(emptyCounts());
+  const [eventCount, setEventCount] = useState(0);
+  const [dayCount, setDayCount] = useState(0);
+  const [summary, setSummary] = useState("");
+  const [tuneAction, setTuneAction] = useState("");
+  const [energyFrom, setEnergyFrom] = useState("");
+  const [energyTo, setEnergyTo] = useState("");
+  const [energyTrend, setEnergyTrend] = useState("");
+  const [blackHole, setBlackHole] = useState<CategoryId>("jimao");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [dumping, setDumping] = useState(false);
 
-  const loadReport = useCallback(async (force = false) => {
-    const date = todayKey();
-    const local = ensureDay(date);
-    setDay(local);
+  const rangeLabel = useMemo(() => {
+    if (!date) return "…";
+    const r = rangeFor(period, date);
+    if (period === "today") return formatDisplayDate(date);
+    return `${formatDisplayDate(r.start)} – ${formatDisplayDate(r.end)}`;
+  }, [period, date]);
 
-    if (
-      !force &&
-      local.summary &&
-      local.oneLiner &&
-      local.tuneAction &&
-      local.events.length > 0
-    ) {
-      setLoading(false);
-      return;
-    }
+  const load = useCallback(
+    async (p: PeriodKind, force = false) => {
+      const d = todayKey();
+      setDate(d);
+      const local = ensureDay(d);
+      setDay(local);
 
-    if (local.events.length === 0) {
-      setLoading(false);
-      return;
-    }
+      const { start, end } = rangeFor(p, d);
+      const agg = aggregateRange(start, end);
+      setCounts(agg.counts);
+      setEventCount(agg.events.length);
+      setDayCount(agg.dayCount);
 
-    setLoading(true);
-    setError("");
-    try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: "report",
-          date,
-          existingEvents: local.events,
-          rawInputs: local.rawInputs,
-        }),
-      });
-      if (!res.ok) throw new Error("report failed");
-      const data = (await res.json()) as AnalyzeResponse;
-      const next = updateDay(date, {
-        blackHole: data.blackHole,
-        summary: data.summary,
-        tuneAction: data.tuneAction,
-        energyFrom: data.energyFrom,
-        energyTo: data.energyTo,
-        energyTrend: data.energyTrend,
-        oneLiner: data.oneLiner,
-      });
-      setDay(next);
-    } catch {
-      setError("报告生成失败，显示本地草稿。");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+      if (agg.events.length === 0) {
+        setSummary("");
+        setTuneAction("");
+        setEnergyFrom("");
+        setEnergyTo("");
+        setEnergyTrend("");
+        setBlackHole("jimao");
+        setLoading(false);
+        return;
+      }
+
+      // Today: reuse cached day report when available
+      if (
+        p === "today" &&
+        !force &&
+        local.summary &&
+        local.tuneAction &&
+        local.events.length > 0
+      ) {
+        setSummary(local.summary);
+        setTuneAction(local.tuneAction);
+        setEnergyFrom(local.energyFrom || "");
+        setEnergyTo(local.energyTo || "");
+        setEnergyTrend(local.energyTrend || "");
+        setBlackHole(local.blackHole || blackHoleFromCounts(agg.counts));
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      setError("");
+      try {
+        const body =
+          p === "today"
+            ? {
+                mode: "report" as const,
+                date: d,
+                existingEvents: local.events,
+                rawInputs: local.rawInputs,
+              }
+            : {
+                mode: "period" as const,
+                date: d,
+                period: p,
+                counts: agg.counts,
+                eventCount: agg.events.length,
+                dayCount: agg.dayCount,
+              };
+
+        const res = await fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error("report failed");
+        const data = (await res.json()) as AnalyzeResponse;
+
+        setSummary(data.summary || "");
+        setTuneAction(data.tuneAction || "");
+        setEnergyFrom(data.energyFrom || "");
+        setEnergyTo(data.energyTo || "");
+        setEnergyTrend(data.energyTrend || "");
+        setBlackHole(data.blackHole || blackHoleFromCounts(agg.counts));
+        if (data.counts) setCounts(data.counts);
+
+        if (p === "today") {
+          const next = updateDay(d, {
+            blackHole: data.blackHole,
+            summary: data.summary,
+            tuneAction: data.tuneAction,
+            energyFrom: data.energyFrom,
+            energyTo: data.energyTo,
+            energyTrend: data.energyTrend,
+          });
+          setDay(next);
+        }
+      } catch {
+        setError("报告生成失败，显示本地计数。");
+        setBlackHole(blackHoleFromCounts(agg.counts));
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    loadReport(false);
-  }, [loadReport]);
+    load(period, false);
+  }, [period, load]);
 
-  const counts =
-    day && day.events.length
-      ? countByCategory(day.events)
-      : emptyCounts();
-
-  const blackHole: CategoryId = day?.blackHole || "jimao";
   const bh = CATEGORIES[blackHole];
 
   const onDump = () => {
-    if (!day) return;
+    if (!day || period !== "today") return;
     setDumping(true);
     updateDay(day.date, { dumpedVisualAt: new Date().toISOString() });
     setTimeout(() => {
@@ -94,38 +174,62 @@ export default function TodayPage() {
   };
 
   const onTuneDone = () => {
-    if (!day) return;
+    if (!day || period !== "today") return;
     const next = updateDay(day.date, { tuneDone: true });
     setDay(next);
   };
 
+  const empty = eventCount === 0 && !loading;
+
   return (
     <>
-      <div className="nav-mini">
-        <Link href="/">← 回家</Link>
-        <strong>今日屁事报告</strong>
-        <Link href="/diary">日记</Link>
-      </div>
+      <header className="page-header">
+        <h1 className="page-title">报告</h1>
+        <p className="muted" style={{ margin: "4px 0 0", fontSize: "0.85rem" }}>
+          {rangeLabel}
+        </p>
+      </header>
 
-      <p className="muted" style={{ margin: 0, textAlign: "center" }}>
-        {day ? formatDisplayDate(day.date) : "…"}
-      </p>
+      <div className="segment" role="tablist" aria-label="统计范围">
+        {PERIODS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            role="tab"
+            aria-selected={period === p.id}
+            className={`segment-item${period === p.id ? " active" : ""}`}
+            onClick={() => setPeriod(p.id)}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
 
       {error && <div className="error">{error}</div>}
 
-      {!day || (day.events.length === 0 && !loading) ? (
+      {empty ? (
         <div className="card empty">
-          今天桶还是空的。
+          {period === "today"
+            ? "今天桶还是空的。"
+            : period === "week"
+              ? "本周还没有倒破事。"
+              : "本月还没有倒破事。"}
           <div style={{ marginTop: 14 }}>
-            <Link href="/record" className="btn btn-primary">
+            <Link href="/" className="btn btn-primary">
               去倒一点
             </Link>
           </div>
         </div>
       ) : (
         <>
-          <section className="card" aria-label="今日计数">
-            <strong>今日分类</strong>
+          <section className="card" aria-label="分类计数">
+            <strong>
+              {period === "today"
+                ? "今日分类"
+                : period === "week"
+                  ? "本周分类"
+                  : "本月分类"}
+            </strong>
             <div className="counts" style={{ marginTop: 12 }}>
               {CATEGORY_ORDER.map((id) => (
                 <div key={id} className="count-item">
@@ -135,13 +239,28 @@ export default function TodayPage() {
                 </div>
               ))}
             </div>
+            {period !== "today" && (
+              <p className="muted" style={{ fontSize: "0.8rem", marginBottom: 0 }}>
+                共 {dayCount} 天有记录 · {eventCount} 件
+              </p>
+            )}
           </section>
 
           <section className="card">
             <div className="muted" style={{ fontSize: "0.8rem" }}>
-              今日最大能量黑洞
+              {period === "today"
+                ? "今日最大能量黑洞"
+                : period === "week"
+                  ? "本周最大能量黑洞"
+                  : "本月最大能量黑洞"}
             </div>
-            <p style={{ margin: "8px 0 0", fontSize: "1.25rem", fontWeight: 800 }}>
+            <p
+              style={{
+                margin: "8px 0 0",
+                fontSize: "1.25rem",
+                fontWeight: 800,
+              }}
+            >
               {bh.emoji} {bh.name}
             </p>
             <p className="muted" style={{ margin: "6px 0 0", fontSize: "0.9rem" }}>
@@ -150,24 +269,30 @@ export default function TodayPage() {
           </section>
 
           <section className="card">
-            <strong>AI 说</strong>
+            <strong>AI洞见</strong>
             {loading ? (
-              <p className="muted">正在写报告…</p>
+              <p className="muted">正在写洞见…</p>
             ) : (
               <p style={{ margin: "8px 0 0", lineHeight: 1.6 }}>
-                {day.summary || "今天就这些破事，先到这儿。"}
+                {summary || "这段日子就这些破事，先到这儿。"}
               </p>
             )}
           </section>
 
           <section className="card">
-            <strong>今日状态</strong>
+            <strong>
+              {period === "today"
+                ? "今日状态"
+                : period === "week"
+                  ? "本周状态"
+                  : "本月状态"}
+            </strong>
             <div className="energy-flow" style={{ marginTop: 12 }}>
-              <span>{day.energyFrom || "😑平平"}</span>
+              <span>{energyFrom || "😑平平"}</span>
               <span aria-hidden>→</span>
-              <span>{day.energyTo || "🌤️回血中"}</span>
-              {day.energyTrend && (
-                <span className="trend-tag">{day.energyTrend}</span>
+              <span>{energyTo || "🌤️回血中"}</span>
+              {energyTrend && (
+                <span className="trend-tag">{energyTrend}</span>
               )}
             </div>
             <p className="muted" style={{ fontSize: "0.8rem", marginBottom: 0 }}>
@@ -176,63 +301,78 @@ export default function TodayPage() {
           </section>
 
           <section className="card">
-            <strong>今天调一下</strong>
+            <strong>
+              {period === "today"
+                ? "今天调一下"
+                : period === "week"
+                  ? "本周调一下"
+                  : "本月调一下"}
+            </strong>
             <p style={{ margin: "8px 0 12px", lineHeight: 1.55 }}>
-              {day.tuneAction || "喝口水，歇十秒。"}
+              {tuneAction || "喝口水，歇十秒。"}
             </p>
-            {day.tuneDone ? (
-              <div className="status-pill">✓ 完成（今天够了）</div>
-            ) : (
-              <button type="button" className="btn btn-soft" onClick={onTuneDone}>
-                去做 → 完成
+            {period === "today" &&
+              (day?.tuneDone ? (
+                <div className="status-pill">✓ 完成（今天够了）</div>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-soft"
+                  onClick={onTuneDone}
+                >
+                  去做 → 完成
+                </button>
+              ))}
+          </section>
+
+          {period === "today" && (
+            <section className="card">
+              <strong>今日屁事桶</strong>
+              <p className="muted" style={{ fontSize: "0.85rem" }}>
+                「倒掉」只是视觉仪式，日记还在。
+              </p>
+              <div
+                className={`bucket ${dumping ? "dumping" : ""}`}
+                style={{ marginTop: 8 }}
+              >
+                {!dumping && !day?.dumpedVisualAt && <span>🪣 满满的破事</span>}
+                {!dumping && day?.dumpedVisualAt && (
+                  <span>已倒掉（日记仍在）</span>
+                )}
+                {dumping && (
+                  <>
+                    <span>倒——</span>
+                    <span className="blob" style={{ left: "30%" }} />
+                    <span
+                      className="blob"
+                      style={{ left: "48%", width: 20, height: 20 }}
+                    />
+                    <span
+                      className="blob"
+                      style={{ left: "62%", width: 34, height: 34 }}
+                    />
+                  </>
+                )}
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ marginTop: 12 }}
+                onClick={onDump}
+                disabled={dumping}
+              >
+                倒掉
               </button>
-            )}
-          </section>
-
-          <section className="card">
-            <strong>今日屁事桶</strong>
-            <p className="muted" style={{ fontSize: "0.85rem" }}>
-              「倒掉」只是视觉仪式，日记还在。
-            </p>
-            <div className={`bucket ${dumping ? "dumping" : ""}`} style={{ marginTop: 8 }}>
-              {!dumping && !day.dumpedVisualAt && <span>🪣 满满的破事</span>}
-              {!dumping && day.dumpedVisualAt && <span>已倒掉（日记仍在）</span>}
-              {dumping && (
-                <>
-                  <span>倒——</span>
-                  <span className="blob" style={{ left: "30%" }} />
-                  <span className="blob" style={{ left: "48%", width: 20, height: 20 }} />
-                  <span className="blob" style={{ left: "62%", width: 34, height: 34 }} />
-                </>
-              )}
-            </div>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              style={{ marginTop: 12 }}
-              onClick={onDump}
-              disabled={dumping}
-            >
-              倒掉
-            </button>
-          </section>
-
-          <section className="card" style={{ textAlign: "center" }}>
-            <div className="muted" style={{ fontSize: "0.8rem" }}>
-              今日一句话
-            </div>
-            <p style={{ fontSize: "1.1rem", fontWeight: 700, margin: "8px 0 0" }}>
-              {day.oneLiner || "鉴定完毕：大多是屁大点事。"}
-            </p>
-          </section>
+            </section>
+          )}
 
           <button
             type="button"
             className="btn btn-ghost"
-            onClick={() => loadReport(true)}
+            onClick={() => load(period, true)}
             disabled={loading}
           >
-            重新生成报告
+            重新生成
           </button>
         </>
       )}

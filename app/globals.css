@@ -12,6 +12,7 @@
   --shadow: 0 8px 28px rgba(80, 50, 20, 0.08);
   --radius: 20px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --tab-h: 64px;
   --font: ui-rounded, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC",
     "Microsoft YaHei", system-ui, -apple-system, sans-serif;
 }
@@ -56,10 +57,10 @@ textarea {
   max-width: 480px;
   margin: 0 auto;
   min-height: 100dvh;
-  padding: 20px 18px calc(28px + var(--safe-bottom));
+  padding: 16px 18px calc(var(--tab-h) + 20px + var(--safe-bottom));
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .card {
@@ -79,6 +80,22 @@ textarea {
   font-weight: 800;
   letter-spacing: 0.04em;
   margin: 0;
+}
+
+.page-header {
+  text-align: center;
+  padding-top: 4px;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+.chat-header {
+  text-align: center;
+  padding-top: 4px;
 }
 
 .subtitle {
@@ -164,20 +181,10 @@ textarea {
 
 .egg {
   text-align: center;
-  font-size: 0.92rem;
+  font-size: 0.88rem;
   color: var(--muted);
   font-style: italic;
   padding: 4px 8px;
-}
-
-.link-row {
-  text-align: center;
-  margin-top: 4px;
-}
-
-.link-row a {
-  font-weight: 600;
-  border-bottom: 1px dashed var(--accent-soft);
 }
 
 .chat-log {
@@ -218,6 +225,13 @@ textarea {
   animation: pop 0.35s ease;
 }
 
+.classify-reveal {
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
 @keyframes pop {
   from {
     opacity: 0;
@@ -234,9 +248,11 @@ textarea {
   flex-direction: column;
   gap: 10px;
   position: sticky;
-  bottom: 0;
+  bottom: calc(var(--tab-h) + var(--safe-bottom));
   padding-top: 8px;
+  padding-bottom: 4px;
   background: linear-gradient(to top, var(--bg) 70%, transparent);
+  z-index: 5;
 }
 
 .composer textarea {
@@ -306,6 +322,61 @@ textarea {
   }
 }
 
+.cal-card.cal-compact {
+  padding-bottom: 12px;
+}
+
+.cal-toggle {
+  margin-top: 10px;
+  min-height: 40px;
+  font-size: 0.9rem;
+}
+
+.week-strip {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+.week-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 2px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  color: var(--ink);
+  min-height: 52px;
+}
+
+.week-wd {
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.week-num {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.week-cell.has {
+  background: var(--accent-soft);
+  border-color: #efb88a;
+}
+
+.week-cell.selected {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent-deep);
+}
+
+.week-cell.selected .week-wd {
+  color: rgba(255, 255, 255, 0.85);
+}
+
 .cal-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
@@ -347,6 +418,10 @@ textarea {
 .cal-cell:disabled {
   opacity: 0.25;
   cursor: default;
+}
+
+.day-events {
+  flex: 1;
 }
 
 .nav-mini {
@@ -397,6 +472,78 @@ textarea {
   color: var(--ok);
   padding: 4px 10px;
   border-radius: 999px;
+}
+
+.segment {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.segment-item {
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  min-height: 40px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.segment-item.active {
+  background: #fff;
+  color: var(--accent-deep);
+  box-shadow: 0 2px 8px rgba(80, 50, 20, 0.08);
+}
+
+.tab-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: center;
+  max-width: 480px;
+  margin: 0 auto;
+  height: calc(var(--tab-h) + var(--safe-bottom));
+  padding: 6px 8px var(--safe-bottom);
+  background: rgba(255, 253, 248, 0.94);
+  border-top: 1px solid var(--line);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.tab-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.72rem;
+  border-radius: 14px;
+  min-height: 52px;
+  text-decoration: none;
+}
+
+.tab-item.active {
+  color: var(--accent-deep);
+}
+
+.tab-icon {
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.tab-label {
+  letter-spacing: 0.02em;
 }
 
 .sr-only {

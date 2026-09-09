@@ -1,5 +1,6 @@
-import type { DayData, EventItem } from "./types";
-import { todayKey } from "./dates";
+import type { CategoryId, DayData, EventItem } from "./types";
+import { todayKey, dateInRange } from "./dates";
+import { countByCategory, emptyCounts, mergeCounts } from "./categories";
 
 const PREFIX = "pdds:";
 const INDEX_KEY = "pdds:index";
@@ -86,4 +87,35 @@ export function listDatesWithData(): string[] {
 export function datesInMonth(year: number, month: number): Set<string> {
   const prefix = `${year}-${String(month + 1).padStart(2, "0")}-`;
   return new Set(readIndex().filter((d) => d.startsWith(prefix)));
+}
+
+export function getDaysInRange(start: string, end: string): DayData[] {
+  return readIndex()
+    .filter((d) => dateInRange(d, start, end))
+    .map((d) => getDay(d))
+    .filter((d): d is DayData => !!d);
+}
+
+export function aggregateRange(
+  start: string,
+  end: string
+): {
+  counts: Record<CategoryId, number>;
+  events: EventItem[];
+  days: DayData[];
+  dayCount: number;
+} {
+  const days = getDaysInRange(start, end);
+  let counts = emptyCounts();
+  const events: EventItem[] = [];
+  for (const day of days) {
+    counts = mergeCounts(counts, countByCategory(day.events));
+    events.push(...day.events);
+  }
+  return {
+    counts,
+    events,
+    days,
+    dayCount: days.filter((d) => d.events.length > 0).length,
+  };
 }

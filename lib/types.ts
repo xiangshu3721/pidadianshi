@@ -5,13 +5,18 @@ export type CategoryId =
   | "guimao"
   | "laihama";
 
+export type PeriodKind = "today" | "week" | "month";
+
 export interface EventItem {
   id: string;
   text: string;
   category: CategoryId;
   emotion: string;
   thought: string;
+  /** Deeper psychological/life insight (AI洞见) */
   insight: string;
+  /** One-line reason why this fits the category bucket */
+  why?: string;
 }
 
 export interface DayData {
@@ -31,11 +36,16 @@ export interface DayData {
 }
 
 export interface AnalyzeRequest {
-  mode: "analyze" | "report";
+  mode: "analyze" | "report" | "period";
   text?: string;
   date: string;
   existingEvents?: EventItem[];
   rawInputs?: string[];
+  /** For period mode */
+  period?: PeriodKind;
+  counts?: Record<CategoryId, number>;
+  eventCount?: number;
+  dayCount?: number;
 }
 
 export interface AnalyzeResponse {

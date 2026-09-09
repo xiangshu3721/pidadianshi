@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import TabBar from "@/components/TabBar";
 
 export const metadata: Metadata = {
   title: "屁大点事",
@@ -22,6 +23,7 @@ export default function RootLayout({
     <html lang="zh-CN">
       <body>
         <main className="app-shell">{children}</main>
+        <TabBar />
       </body>
     </html>
   );

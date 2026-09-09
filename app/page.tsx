@@ -1,82 +1,355 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
-import { CATEGORIES, CATEGORY_ORDER, countByCategory } from "@/lib/categories";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { CATEGORIES, classifyRevealLine } from "@/lib/categories";
 import { todayKey } from "@/lib/dates";
 import { eggForDate } from "@/lib/eggs";
-import { ensureDay } from "@/lib/storage";
-import type { CategoryId } from "@/lib/types";
+import {
+  appendEvents,
+  appendRawInput,
+  ensureDay,
+  updateDay,
+} from "@/lib/storage";
+import type { AnalyzeResponse, EventItem } from "@/lib/types";
 
-export default function HomePage() {
+type Phase = "idle" | "listening" | "analyzing" | "revealed" | "error";
+
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult:
+    | ((ev: {
+        results: {
+          [i: number]: { [j: number]: { transcript: string }; isFinal: boolean };
+          length: number;
+        };
+      }) => void)
+    | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  };
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+}
+
+export default function HomeChatPage() {
+  const router = useRouter();
   const [date, setDate] = useState("");
-  const [counts, setCounts] = useState<Record<CategoryId, number> | null>(null);
   const [egg, setEgg] = useState("");
+  const [text, setText] = useState("");
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [error, setError] = useState("");
+  const [userBubbles, setUserBubbles] = useState<string[]>([]);
+  const [newEvents, setNewEvents] = useState<EventItem[]>([]);
+  const [visibleCount, setVisibleCount] = useState(0);
+  const [deepen, setDeepen] = useState<string | null>(null);
+  const [insightLine, setInsightLine] = useState("");
+  const [recording, setRecording] = useState(false);
+  const mediaRec = useRef<MediaRecorder | null>(null);
+  const chunks = useRef<Blob[]>([]);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
   useEffect(() => {
     const d = todayKey();
     setDate(d);
     setEgg(eggForDate(d));
-    const day = ensureDay(d);
-    setCounts(countByCategory(day.events));
+    ensureDay(d);
   }, []);
+
+  useEffect(() => {
+    if (phase !== "revealed" || visibleCount >= newEvents.length) return;
+    const t = setTimeout(() => setVisibleCount((n) => n + 1), 420);
+    return () => clearTimeout(t);
+  }, [phase, visibleCount, newEvents.length]);
+
+  const stopVoice = useCallback(() => {
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    if (mediaRec.current && mediaRec.current.state !== "inactive") {
+      mediaRec.current.stop();
+    }
+    mediaRec.current = null;
+    setRecording(false);
+    setPhase((p) => (p === "listening" ? "idle" : p));
+  }, []);
+
+  const startVoice = async () => {
+    setError("");
+    const SR = getSpeechRecognition();
+    if (SR) {
+      try {
+        const rec = new SR();
+        rec.lang = "zh-CN";
+        rec.continuous = true;
+        rec.interimResults = true;
+        let finalText = text;
+        rec.onresult = (ev) => {
+          let interim = "";
+          let finals = "";
+          for (let i = 0; i < ev.results.length; i++) {
+            const r = ev.results[i];
+            if (r.isFinal) finals += r[0].transcript;
+            else interim += r[0].transcript;
+          }
+          if (finals) finalText = (text ? text + " " : "") + finals;
+          setText((finalText + (interim ? " " + interim : "")).trim());
+        };
+        rec.onerror = () => {
+          setError("语音识别有点抽风，你可以改打字。");
+          stopVoice();
+        };
+        rec.onend = () => {
+          setRecording(false);
+          setPhase((p) => (p === "listening" ? "idle" : p));
+        };
+        recognitionRef.current = rec;
+        rec.start();
+        setRecording(true);
+        setPhase("listening");
+        return;
+      } catch {
+        // fall through
+      }
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      chunks.current = [];
+      mr.ondataavailable = (e) => {
+        if (e.data.size) chunks.current.push(e.data);
+      };
+      mr.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setError(
+          "当前浏览器不支持语音转文字。录音已停，请直接打字倒吧（一样管用）。"
+        );
+        setRecording(false);
+        setPhase("idle");
+      };
+      mediaRec.current = mr;
+      mr.start();
+      setRecording(true);
+      setPhase("listening");
+    } catch {
+      setError("麦克风不可用。打字也完全 OK。");
+      setPhase("idle");
+    }
+  };
+
+  const analyze = async () => {
+    const payload = text.trim();
+    if (!payload) {
+      setError("先随便说两句破事。");
+      return;
+    }
+    stopVoice();
+    setError("");
+    setPhase("analyzing");
+    setNewEvents([]);
+    setVisibleCount(0);
+    setDeepen(null);
+    setInsightLine("");
+    setUserBubbles((b) => [...b, payload]);
+    appendRawInput(date || todayKey(), payload);
+    setText("");
+
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "analyze",
+          text: payload,
+          date: date || todayKey(),
+        }),
+      });
+      if (!res.ok) throw new Error("analyze failed");
+      const data = (await res.json()) as AnalyzeResponse;
+      const events = data.events || [];
+      appendEvents(date || todayKey(), events);
+      if (data.deepen) {
+        updateDay(date || todayKey(), { deepen: data.deepen });
+        setDeepen(data.deepen);
+      }
+      setNewEvents(events);
+      setInsightLine(
+        events[0]?.insight ||
+          "底下多半有个没被点名的需要。叫出名字就算过了一半。"
+      );
+      setPhase("revealed");
+      setVisibleCount(0);
+    } catch {
+      setError("鉴定失败了，可能是网络。再试一次？");
+      setPhase("error");
+    }
+  };
+
+  const finishDay = () => {
+    router.push("/today");
+  };
 
   return (
     <>
-      <header style={{ textAlign: "center", paddingTop: 28 }}>
-        <p className="muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-          MVP · 本地日记
-        </p>
-        <h1 className="title" style={{ marginTop: 8 }}>
+      <header className="chat-header">
+        <h1 className="title" style={{ fontSize: "1.35rem", margin: 0 }}>
           屁大点事
         </h1>
-        <p className="subtitle">今天又有什么破事？</p>
+        {egg && (
+          <p className="egg" style={{ margin: "4px 0 0", padding: 0 }}>
+            {egg}
+          </p>
+        )}
       </header>
 
-      <p className="egg" aria-live="polite">
-        {egg || "…"}
-      </p>
+      <div className="chat-log" aria-live="polite">
+        {userBubbles.length === 0 && phase === "idle" && (
+          <div className="empty">
+            把破事倒这儿。语音或打字都行。
+            <br />
+            <span style={{ fontSize: "0.85rem" }}>
+              AI 会拆成几件，贴上 🪶🫘🍉🐢🐸
+            </span>
+          </div>
+        )}
 
-      <Link href="/record" className="btn btn-primary" style={{ textDecoration: "none" }}>
-        🎙️ 随便说说
-      </Link>
+        {userBubbles.map((b, i) => (
+          <div key={`u-${i}`} className="bubble bubble-user">
+            {b}
+          </div>
+        ))}
 
-      <p className="muted" style={{ textAlign: "center", fontSize: "0.88rem", margin: 0 }}>
-        1–3 分钟倒完就行。AI 帮你分类、看透、调回来——不看病、不开课。
-      </p>
+        {phase === "analyzing" && (
+          <div className="bubble bubble-ai">
+            <span className="status-pill">正在鉴定……</span>
+            <div className="muted" style={{ marginTop: 8, fontSize: "0.9rem" }}>
+              先别急，看看是不是屁大点事。
+            </div>
+          </div>
+        )}
 
-      <section className="card" aria-label="今日分类计数">
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            marginBottom: 12,
-          }}
-        >
-          <strong>今日桶</strong>
-          <span className="muted" style={{ fontSize: "0.85rem" }}>
-            {date || "—"}
-          </span>
-        </div>
-        <div className="counts">
-          {CATEGORY_ORDER.map((id) => {
-            const c = CATEGORIES[id];
-            return (
-              <div key={id} className="count-item">
-                <div className="emoji" aria-hidden>
-                  {c.emoji}
+        {phase === "revealed" && (
+          <div className="bubble bubble-ai" style={{ maxWidth: "100%" }}>
+            <div style={{ fontWeight: 700, marginBottom: 10 }}>拆好了：</div>
+            {newEvents.slice(0, visibleCount).map((ev) => {
+              const cat = CATEGORIES[ev.category];
+              return (
+                <div
+                  key={ev.id}
+                  className="event-card"
+                  style={{ marginBottom: 8 }}
+                >
+                  <div className="classify-reveal">
+                    {classifyRevealLine(ev.category, ev.why)}
+                  </div>
+                  <div style={{ fontSize: "1.05rem", marginTop: 6 }}>
+                    <strong>
+                      {cat.emoji} {ev.text}
+                    </strong>
+                  </div>
+                  <div
+                    className="muted"
+                    style={{ fontSize: "0.8rem", marginTop: 4 }}
+                  >
+                    {cat.emoji} {cat.name} · 情绪 {ev.emotion}
+                  </div>
                 </div>
-                <div className="n">{counts ? counts[id] : "·"}</div>
-                <div className="label">{c.short}</div>
-              </div>
-            );
-          })}
-        </div>
-      </section>
+              );
+            })}
+            {visibleCount >= newEvents.length && (
+              <>
+                <div style={{ marginTop: 12 }}>
+                  <strong>AI洞见</strong>
+                  <p style={{ margin: "6px 0 0", lineHeight: 1.55 }}>
+                    {insightLine}
+                  </p>
+                </div>
+                {deepen && (
+                  <div
+                    className="card"
+                    style={{
+                      marginTop: 12,
+                      background: "#fff3e6",
+                      boxShadow: "none",
+                    }}
+                  >
+                    <div className="muted" style={{ fontSize: "0.8rem" }}>
+                      可选深挖（不问第二遍）
+                    </div>
+                    <p style={{ margin: "6px 0 0" }}>{deepen}</p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
-      <div className="link-row" style={{ display: "flex", gap: 20, justifyContent: "center" }}>
-        <Link href="/today">今日报告</Link>
-        <Link href="/diary">📅 日记</Link>
+        {error && <div className="error">{error}</div>}
+      </div>
+
+      <div className="composer">
+        <label className="sr-only" htmlFor="dump">
+          倒破事
+        </label>
+        <textarea
+          id="dump"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="比如：早上地铁挤成饼，下午又想起去年那次吵架……"
+          disabled={phase === "analyzing"}
+        />
+        <div className="composer-actions">
+          <button
+            type="button"
+            className="btn btn-soft"
+            onClick={recording ? stopVoice : startVoice}
+            disabled={phase === "analyzing"}
+            aria-pressed={recording}
+          >
+            {recording ? "⏹ 停" : "🎙️ 语音"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={analyze}
+            disabled={phase === "analyzing" || !text.trim()}
+            style={{ width: "100%" }}
+          >
+            倒给 AI
+          </button>
+        </div>
+        {phase === "revealed" && visibleCount >= newEvents.length && (
+          <div className="composer-actions">
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setPhase("idle");
+                setNewEvents([]);
+                setDeepen(null);
+              }}
+            >
+              继续倒
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={finishDay}
+            >
+              今天就这些
+            </button>
+          </div>
+        )}
       </div>
     </>
   );
