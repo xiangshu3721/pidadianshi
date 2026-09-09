@@ -1,0 +1,23 @@
+{
+  "name": "pidadianshi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "屁大点事 — 每天花 1–3 分钟把破事倒给 AI",
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p 3000",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0 -p 3000",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^15.5.25",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "typescript": "^5.9.2"
+  }
+}

@@ -1,0 +1,326 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { CATEGORIES } from "@/lib/categories";
+import { todayKey } from "@/lib/dates";
+import {
+  appendEvents,
+  appendRawInput,
+  ensureDay,
+  updateDay,
+} from "@/lib/storage";
+import type { AnalyzeResponse, EventItem } from "@/lib/types";
+
+type Phase = "idle" | "listening" | "analyzing" | "revealed" | "error";
+
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((ev: { results: { [i: number]: { [j: number]: { transcript: string }; isFinal: boolean }; length: number } }) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  };
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+}
+
+export default function RecordPage() {
+  const router = useRouter();
+  const [date, setDate] = useState("");
+  const [text, setText] = useState("");
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [error, setError] = useState("");
+  const [userBubbles, setUserBubbles] = useState<string[]>([]);
+  const [newEvents, setNewEvents] = useState<EventItem[]>([]);
+  const [visibleCount, setVisibleCount] = useState(0);
+  const [deepen, setDeepen] = useState<string | null>(null);
+  const [insightLine, setInsightLine] = useState("");
+  const [recording, setRecording] = useState(false);
+  const mediaRec = useRef<MediaRecorder | null>(null);
+  const chunks = useRef<Blob[]>([]);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+
+  useEffect(() => {
+    const d = todayKey();
+    setDate(d);
+    ensureDay(d);
+  }, []);
+
+  useEffect(() => {
+    if (phase !== "revealed" || visibleCount >= newEvents.length) return;
+    const t = setTimeout(() => setVisibleCount((n) => n + 1), 420);
+    return () => clearTimeout(t);
+  }, [phase, visibleCount, newEvents.length]);
+
+  const stopVoice = useCallback(() => {
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    if (mediaRec.current && mediaRec.current.state !== "inactive") {
+      mediaRec.current.stop();
+    }
+    mediaRec.current = null;
+    setRecording(false);
+    setPhase((p) => (p === "listening" ? "idle" : p));
+  }, []);
+
+  const startVoice = async () => {
+    setError("");
+    const SR = getSpeechRecognition();
+    if (SR) {
+      try {
+        const rec = new SR();
+        rec.lang = "zh-CN";
+        rec.continuous = true;
+        rec.interimResults = true;
+        let finalText = text;
+        rec.onresult = (ev) => {
+          let interim = "";
+          let finals = "";
+          for (let i = 0; i < ev.results.length; i++) {
+            const r = ev.results[i];
+            if (r.isFinal) finals += r[0].transcript;
+            else interim += r[0].transcript;
+          }
+          if (finals) finalText = (text ? text + " " : "") + finals;
+          setText((finalText + (interim ? " " + interim : "")).trim());
+        };
+        rec.onerror = () => {
+          setError("语音识别有点抽风，你可以改打字。");
+          stopVoice();
+        };
+        rec.onend = () => {
+          setRecording(false);
+          setPhase((p) => (p === "listening" ? "idle" : p));
+        };
+        recognitionRef.current = rec;
+        rec.start();
+        setRecording(true);
+        setPhase("listening");
+        return;
+      } catch {
+        // fall through to MediaRecorder
+      }
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      chunks.current = [];
+      mr.ondataavailable = (e) => {
+        if (e.data.size) chunks.current.push(e.data);
+      };
+      mr.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        // No STT without Web Speech — keep text box focus
+        setError(
+          "当前浏览器不支持语音转文字。录音已停，请直接打字倒吧（一样管用）。"
+        );
+        setRecording(false);
+        setPhase("idle");
+      };
+      mediaRec.current = mr;
+      mr.start();
+      setRecording(true);
+      setPhase("listening");
+    } catch {
+      setError("麦克风不可用。打字也完全 OK。");
+      setPhase("idle");
+    }
+  };
+
+  const analyze = async () => {
+    const payload = text.trim();
+    if (!payload) {
+      setError("先随便说两句破事。");
+      return;
+    }
+    stopVoice();
+    setError("");
+    setPhase("analyzing");
+    setNewEvents([]);
+    setVisibleCount(0);
+    setDeepen(null);
+    setInsightLine("");
+    setUserBubbles((b) => [...b, payload]);
+    appendRawInput(date || todayKey(), payload);
+    setText("");
+
+    try {
+      const res = await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "analyze",
+          text: payload,
+          date: date || todayKey(),
+        }),
+      });
+      if (!res.ok) throw new Error("analyze failed");
+      const data = (await res.json()) as AnalyzeResponse;
+      const events = data.events || [];
+      appendEvents(date || todayKey(), events);
+      if (data.deepen) {
+        updateDay(date || todayKey(), { deepen: data.deepen });
+        setDeepen(data.deepen);
+      }
+      setNewEvents(events);
+      setInsightLine(
+        events[0]?.insight ||
+          "叫出名字就算过了一半。剩下的，不一定今天解决。"
+      );
+      setPhase("revealed");
+      setVisibleCount(0);
+    } catch {
+      setError("鉴定失败了，可能是网络。再试一次？");
+      setPhase("error");
+    }
+  };
+
+  const finishDay = () => {
+    router.push("/today");
+  };
+
+  return (
+    <>
+      <div className="nav-mini">
+        <Link href="/">← 回家</Link>
+        <strong>随便说说</strong>
+        <Link href="/today">报告</Link>
+      </div>
+
+      <div className="chat-log" aria-live="polite">
+        {userBubbles.length === 0 && phase === "idle" && (
+          <div className="empty">
+            把破事倒这儿。语音或打字都行。
+            <br />
+            <span style={{ fontSize: "0.85rem" }}>
+              AI 会拆成几件，贴上 🪶🫘🍉🐢🐸
+            </span>
+          </div>
+        )}
+
+        {userBubbles.map((b, i) => (
+          <div key={`u-${i}`} className="bubble bubble-user">
+            {b}
+          </div>
+        ))}
+
+        {phase === "analyzing" && (
+          <div className="bubble bubble-ai">
+            <span className="status-pill">正在鉴定…</span>
+            <div className="muted" style={{ marginTop: 8, fontSize: "0.9rem" }}>
+              先别急，看看是不是屁大点事。
+            </div>
+          </div>
+        )}
+
+        {phase === "revealed" && (
+          <div className="bubble bubble-ai" style={{ maxWidth: "100%" }}>
+            <div style={{ fontWeight: 700, marginBottom: 10 }}>拆好了：</div>
+            {newEvents.slice(0, visibleCount).map((ev) => {
+              const cat = CATEGORIES[ev.category];
+              return (
+                <div key={ev.id} className="event-card" style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: "1.2rem" }}>
+                    {cat.emoji}{" "}
+                    <strong style={{ fontSize: "0.95rem" }}>{ev.text}</strong>
+                  </div>
+                  <div className="muted" style={{ fontSize: "0.8rem", marginTop: 4 }}>
+                    {cat.name} · 情绪 {ev.emotion}
+                  </div>
+                </div>
+              );
+            })}
+            {visibleCount >= newEvents.length && (
+              <>
+                <div style={{ marginTop: 12 }}>
+                  <strong>AI 看了一眼</strong>
+                  <p style={{ margin: "6px 0 0", lineHeight: 1.55 }}>{insightLine}</p>
+                </div>
+                {deepen && (
+                  <div
+                    className="card"
+                    style={{
+                      marginTop: 12,
+                      background: "#fff3e6",
+                      boxShadow: "none",
+                    }}
+                  >
+                    <div className="muted" style={{ fontSize: "0.8rem" }}>
+                      可选深挖（不问第二遍）
+                    </div>
+                    <p style={{ margin: "6px 0 0" }}>{deepen}</p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {error && <div className="error">{error}</div>}
+      </div>
+
+      <div className="composer">
+        <label className="sr-only" htmlFor="dump">
+          倒破事
+        </label>
+        <textarea
+          id="dump"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="比如：早上地铁挤成饼，下午又想起去年那次吵架……"
+          disabled={phase === "analyzing"}
+        />
+        <div className="composer-actions">
+          <button
+            type="button"
+            className="btn btn-soft"
+            onClick={recording ? stopVoice : startVoice}
+            disabled={phase === "analyzing"}
+            aria-pressed={recording}
+          >
+            {recording ? "⏹ 停" : "🎙️ 语音"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={analyze}
+            disabled={phase === "analyzing" || !text.trim()}
+            style={{ width: "100%" }}
+          >
+            倒给 AI
+          </button>
+        </div>
+        {phase === "revealed" && visibleCount >= newEvents.length && (
+          <div className="composer-actions">
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setPhase("idle");
+                setNewEvents([]);
+                setDeepen(null);
+              }}
+            >
+              继续倒
+            </button>
+            <button type="button" className="btn btn-primary" onClick={finishDay}>
+              今天就这些
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
