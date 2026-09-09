@@ -11,44 +11,84 @@ import {
   emptyCounts,
 } from "./categories";
 
-const KEYWORDS: { cat: CategoryId; words: string[] }[] = [
-  {
-    cat: "zhima",
-    words: ["后悔", "当初", "以前", "过去", "想起", "当年", "早知道", "怀念"],
-  },
-  {
-    cat: "xigua",
-    words: [
-      "他",
-      "她",
-      "同事",
-      "领导",
-      "朋友",
-      "别人",
-      "隔壁",
-      "室友",
-      "老板",
-    ],
-  },
-  {
-    cat: "guimao",
-    words: [
-      "万一",
-      "如果",
-      "害怕",
-      "担心",
-      "以后",
-      "会不会",
-      "要是",
-      "未来",
-      "焦虑",
-    ],
-  },
-  {
-    cat: "laihama",
-    words: ["烦", "气", "吵", "讨厌", "冲突", "怼", "恶心", "骂", "恶心人"],
-  },
+const WORRY = [
+  "担心",
+  "纠结",
+  "不确定",
+  "会不会",
+  "万一",
+  "如果",
+  "要是",
+  "以后",
+  "未来",
+  "焦虑",
+  "害怕",
+  "怕",
+  "值不值",
+  "符合预期",
+  "学不到",
+  "踩坑",
 ];
+const PAST = ["后悔", "当初", "以前", "过去", "想起", "当年", "早知道", "怀念", "去年"];
+const ANNOY = ["烦", "气死", "吵", "讨厌", "冲突", "怼", "恶心", "骂", "翻脸"];
+/** 真正「别人的瓜」：盯着别人过得怎样，不是「我想学别人怎么做」 */
+const OTHERS_DRAMA = [
+  "朋友圈",
+  "别人又",
+  "别人升职",
+  "别人融资",
+  "别人结婚",
+  "别人发财",
+  "他们家",
+  "八卦",
+  "听说他",
+  "听说她",
+  "对比别人",
+  "羡慕别人",
+  "嫉妒",
+];
+const SELF_DOING = [
+  "我报名",
+  "我报了",
+  "我去",
+  "我想",
+  "我准备",
+  "我决定",
+  "我自己",
+  "刚来",
+  "我的",
+  "报名",
+  "报了一个",
+];
+
+function scoreWords(t: string, words: string[]): number {
+  let s = 0;
+  for (const w of words) if (t.includes(w)) s += 1;
+  return s;
+}
+
+function guessCategory(text: string): CategoryId {
+  const t = text.toLowerCase();
+  const self = scoreWords(t, SELF_DOING);
+  const worry = scoreWords(t, WORRY);
+  const past = scoreWords(t, PAST);
+  const annoy = scoreWords(t, ANNOY);
+  const drama = scoreWords(t, OTHERS_DRAMA);
+
+  // 自己要办/已办的事 + 担心值不值 → 龟毛兔角（不是西瓜）
+  if (worry >= 1 && (self >= 1 || t.includes("我"))) {
+    return "guimao";
+  }
+  if (worry >= 2) return "guimao";
+  if (annoy >= 1) return "laihama";
+  if (past >= 1) return "zhima";
+  // 只有明确「盯别人过得好」才算西瓜；「看看别人怎么用」算自己学习动机
+  if (drama >= 1 && self === 0) return "xigua";
+  if (t.includes("别人") && self === 0 && worry === 0 && !t.includes("学")) {
+    return "xigua";
+  }
+  return "jimao";
+}
 
 function uid(): string {
   return `e_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
@@ -88,24 +128,24 @@ function splitSentences(text: string): string[] {
 /** Deeper insight: surface underlying need/belief, playfully */
 const INSIGHTS: Record<CategoryId, string[]> = {
   jimao: [
-    "底下其实是『我想把日子过得顺一点』——小事反复播，是大脑在要掌控感。叫出名就行，不用审判自己。",
-    "你不是矫情：鸡毛蒜皮攒着，是在找『我有没有被好好对待』的证据。证据够了，就别再开庭。",
+    "其实就是日子里的小磕绊。你不是矫情，是想顺一点——说出来就算放下半截了。",
+    "小事扎一下很正常。别把它开成大会，过一会儿往往就不算事了。",
   ],
   zhima: [
-    "芝麻绿豆翻炒八百遍，底层信念常是『当初选错就永久失格』。过去不能改剧本，只能换观影姿势——你还活着，资格还在。",
-    "你在跟一个已退场的场景要公道。真正想要的，多半是『那时的我其实尽力了』这句话，先自己签收。",
+    "过去的事改不了，你现在反复想，多半是还想对自己说一句：那时候我也尽力了。",
+    "旧账翻来覆去，累的是今天的你。承认『当时不容易』，比再审判一次自己管用。",
   ],
   xigua: [
-    "操心别人的瓜，底下常是『如果我够好，关系就不会乱』。关心可以，承包不行——别人的剧本，不是你的 KPI。",
-    "你吃这瓜吃得认真，像在练『我能预判一切』。可遥控器不在你手里；把能量省给自己那一集。",
+    "你在盯别人的剧本，心却空了自己的。别人过得怎样，替不了你今天要过的日子。",
+    "这瓜再甜也是别人桌上的。你真正缺的，多半是自己那一口踏实，不是旁观席。",
   ],
   guimao: [
-    "龟毛兔角的角还没长出来，你已经开始拔——底下是『不确定=危险』的旧协议。先改成：不确定只是还没到场。",
-    "担心是预演，不是事实。你真正想要的是『到时候的我能应付』——今天练应付感，比预演灾难片划算。",
+    "事儿还没发生，脑子已经先把最差结果演完了。你真正怕的，是『到时候我应付不来』——这能练，但不用今晚把电影看完。",
+    "纠结值不值、会不会踩坑，说明你在乎。把『担心』和『现在要做的一步』分开：现在能做的很小，担心可以晚点再约。",
   ],
   laihama: [
-    "癞蛤蟆跳上来时，烦是边界警报，不是你必须立刻赢的考试。底层需求多半是『我想被尊重 / 想安全离开』——先保住气，再谈要不要开战。",
-    "冲突感很重时，脑内常播『我要是软了就输了』。其实你可以把『今天不接电话』也算赢——赢的是你自己的气。",
+    "烦、想躲，常常是边界在报警。先把自己气顺住，比立刻赢一场更重要。",
+    "冲突感上来时，你未必要马上开战。先问：我要的是赢，还是少受点伤？",
   ],
 };
 
@@ -146,7 +186,7 @@ export function mockAnalyze(text: string): AnalyzeResponse {
   );
   const deepen =
     hasConflict && events.length === 1
-      ? "这事里，你最想立刻扔掉的是哪一小块？"
+      ? "你现在最堵的，到底是哪一句？"
       : null;
 
   return { events, deepen, mock: true };
@@ -168,17 +208,17 @@ function deeperSummary(
   scope: string
 ): string {
   if (events.length === 0) {
-    return `${scope}啥也没倒？也行——空桶说明你没被逼着开庭。空着也是一种松。`;
+    return `${scope}还没记事儿。空着也挺好，想倒的时候再说。`;
   }
   const cat = CATEGORIES[blackHole];
   const needHint: Record<CategoryId, string> = {
-    jimao: "底层在要一点可控与顺畅",
-    zhima: "底层在要一句『那时的我也算尽力』",
-    xigua: "底层在练预判，其实是在找安全感",
-    guimao: "底层在跟不确定谈判，想先拿到『我能应付』",
-    laihama: "底层警报在响：想被尊重，或想安全离开",
+    jimao: "你其实只是想日子顺一点",
+    zhima: "你可能还想对自己说『当时我也尽力了』",
+    xigua: "你把心放在别人身上了，自己这边反而空着",
+    guimao: "你怕的是还没发生的结果，不是眼前这一步",
+    laihama: "你可能更需要被尊重，或先安全离开",
   };
-  return `${scope}倒了 ${events.length} 件。最大能量黑洞在 ${cat.emoji}${cat.name}——${needHint[blackHole]}。叫出名就不算白耗；剩下的，不必今晚结案。`;
+  return `${scope}一共记了 ${events.length} 件。最耗神的是 ${cat.emoji}${cat.name}——${needHint[blackHole]}。先认清它，别的可以明天再说。`;
 }
 
 export function mockReport(events: EventItem[]): AnalyzeResponse {
