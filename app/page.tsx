@@ -10,7 +10,8 @@ import {
   ensureDay,
   updateDay,
 } from "@/lib/storage";
-import type { AnalyzeResponse, EventItem } from "@/lib/types";
+import { requestAnalyze } from "@/lib/analyze-client";
+import type { EventItem } from "@/lib/types";
 
 type Turn = {
   id: string;
@@ -213,17 +214,11 @@ export default function HomeChatPage() {
     appendRawInput(date || todayKey(), payload);
 
     try {
-      const res = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: "analyze",
-          text: payload,
-          date: date || todayKey(),
-        }),
+      const data = await requestAnalyze({
+        mode: "analyze",
+        text: payload,
+        date: date || todayKey(),
       });
-      if (!res.ok) throw new Error("analyze failed");
-      const data = (await res.json()) as AnalyzeResponse;
       const events = data.events || [];
       appendEvents(date || todayKey(), events);
       if (data.deepen) {

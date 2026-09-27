@@ -2,11 +2,13 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import TabBar from "@/components/TabBar";
 
+const assetBase = process.env.NEXT_PUBLIC_BASE_PATH || "";
+
 export const metadata: Metadata = {
   title: "屁大点事",
   description: "每天花 1–3 分钟把破事倒给 AI，AI 帮你分类、看透、调回来。",
   applicationName: "屁大点事",
-  icons: { icon: "/favicon.svg" },
+  icons: { icon: `${assetBase}/favicon.svg` },
 };
 
 export const viewport: Viewport = {
