@@ -11,14 +11,18 @@ const TABS = [
 
 export default function TabBar() {
   const pathname = usePathname();
+  const path =
+    pathname.length > 1 && pathname.endsWith("/")
+      ? pathname.slice(0, -1)
+      : pathname;
 
   return (
     <nav className="tab-bar" aria-label="主导航">
       {TABS.map((tab) => {
         const active =
           tab.href === "/"
-            ? pathname === "/" || pathname === "/record"
-            : pathname === tab.href || pathname.startsWith(tab.href + "/");
+            ? path === "/" || path === "/record"
+            : path === tab.href || path.startsWith(tab.href + "/");
         return (
           <Link
             key={tab.href}

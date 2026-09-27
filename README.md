@@ -4,6 +4,14 @@
 
 语气像损友，不看病、不开课、不灌鸡汤。
 
+## 在线演示
+
+打开：<https://xiangshu3721.github.io/pidadianshi/>
+
+这是 GitHub Pages 上的静态站，没有 Node 服务。倒破事和报告走浏览器里现成的 mock（五类不变），不需要 API Key。记录仍只存在本机 `localStorage`。
+
+第一次发布前，到仓库 **Settings → Pages → Build and deployment → Source**，选 **GitHub Actions**。之后推到 `main`，工作流 `.github/workflows/pages.yml` 会构建 `out/` 并部署。
+
 ## 五类破事（仅此 taxonomy）
 
 | Emoji | 名称 | 含义 |
@@ -27,20 +35,32 @@
 
 ## 本地运行
 
+在项目根目录：
+
 ```bash
-cd /workspace/pidadianshi   # 或你的项目路径
 npm install
-npm run dev -- -H 0.0.0.0 -p 3010
+npm run dev
 ```
 
-浏览器打开：<http://localhost:3010>（默认 script 也可 `npm run dev` → 3000）
+浏览器打开：<http://localhost:3010>
 
-生产模式：
+`npm run dev` 仍走 `/api/analyze`（有 Key 用模型，没有就用服务端 mock）。
+
+静态导出（给 GitHub Pages，挂在 `/pidadianshi/` 下）：
 
 ```bash
-npm run build
-npm start
+npm run build   # 生成 out/
 ```
+
+本地按线上路径预览：
+
+```bash
+mkdir -p /tmp/pages-preview
+ln -sfn "$(pwd)/out" /tmp/pages-preview/pidadianshi
+npx --yes serve /tmp/pages-preview -p 3010
+```
+
+浏览器打开：<http://localhost:3010/pidadianshi/>
 
 ## API Key（可选）
 
@@ -56,9 +76,11 @@ cp .env.example .env.local
 2. `OPENAI_API_KEY`
 3. **都没有 → 确定性 mock**，UI 可完整离线演示
 
-密钥只在服务端路由 `/api/analyze` 使用，不会进前端打包。
+密钥只在本地服务端路由 `/api/analyze` 使用，不会进前端打包，也不会写进 Git。静态站构建不读取这些变量。
 
 `/api/analyze` modes：`analyze`（拆事鉴定）、`report`（今日报告）、`period`（周/月洞见）。
+
+GitHub Pages 没有这个接口。静态包里聊天和报告直接调用 `lib/mock-ai.ts`；本地如果请求 `/api/analyze` 失败，也会落到同一套 mock。
 
 ## 无 Key 演示（Mock 模式）
 

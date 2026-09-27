@@ -14,13 +14,9 @@ import {
   todayKey,
   weekRange,
 } from "@/lib/dates";
+import { requestAnalyze } from "@/lib/analyze-client";
 import { aggregateRange, ensureDay, updateDay } from "@/lib/storage";
-import type {
-  AnalyzeResponse,
-  CategoryId,
-  DayData,
-  PeriodKind,
-} from "@/lib/types";
+import type { CategoryId, DayData, PeriodKind } from "@/lib/types";
 
 const PERIODS: { id: PeriodKind; label: string }[] = [
   { id: "today", label: "今日" },
@@ -120,13 +116,7 @@ export default function ReportPage() {
                 dayCount: agg.dayCount,
               };
 
-        const res = await fetch("/api/analyze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (!res.ok) throw new Error("report failed");
-        const data = (await res.json()) as AnalyzeResponse;
+        const data = await requestAnalyze(body);
 
         setSummary(data.summary || "");
         setTuneAction(data.tuneAction || "");
